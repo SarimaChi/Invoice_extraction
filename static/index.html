@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Groundwork — Invoice extraction</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --ink: #17201c;
+        --muted: #647069;
+        --line: #dce3dd;
+        --paper: #fbfcfa;
+        --green: #245c46;
+        --green-pale: #e8f1eb;
+        --red: #a63d32;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        background: #f1f4ef;
+        color: var(--ink);
+        font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 18px max(24px, calc((100vw - 1180px) / 2));
+        border-bottom: 1px solid var(--line);
+        background: var(--paper);
+      }
+      .brand { display: flex; align-items: center; gap: 10px; font-weight: 720; letter-spacing: -.03em; }
+      .brand-mark { display: grid; width: 30px; height: 30px; place-items: center; border-radius: 9px; background: var(--green); color: white; }
+      .tag { color: var(--muted); font-size: 13px; }
+      main { max-width: 1180px; margin: 0 auto; padding: 48px 24px 64px; }
+      .intro { max-width: 700px; margin-bottom: 28px; }
+      .eyebrow { color: var(--green); font-size: 12px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+      h1 { margin: 8px 0; font-size: clamp(30px, 5vw, 45px); letter-spacing: -.055em; line-height: 1.08; }
+      .intro p { margin: 10px 0 0; color: var(--muted); font-size: 16px; }
+      .workspace { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; }
+      .panel { min-width: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--paper); box-shadow: 0 8px 28px #17201c08; }
+      .panel-head { display: flex; align-items: center; justify-content: space-between; padding: 17px 19px; border-bottom: 1px solid var(--line); }
+      .panel-head h2 { margin: 0; font-size: 15px; }
+      .panel-body { padding: 19px; }
+      .hint { margin: 0 0 12px; color: var(--muted); font-size: 13px; }
+      textarea {
+        display: block; width: 100%; min-height: 295px; resize: vertical; padding: 14px;
+        border: 1px solid var(--line); border-radius: 9px; background: white; color: var(--ink);
+        font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, monospace;
+      }
+      textarea:focus { outline: 2px solid #90b8a0; border-color: transparent; }
+      .or-divider { display: flex; align-items: center; gap: 12px; margin: 14px 0; color: var(--muted); font-size: 12px; }
+      .or-divider::before, .or-divider::after { height: 1px; flex: 1; background: var(--line); content: ""; }
+      .file-picker {
+        display: flex; min-height: 48px; align-items: center; gap: 12px; padding: 8px 11px;
+        border: 1px dashed #b8c5bb; border-radius: 9px; background: #fff;
+      }
+      .file-picker input { max-width: 100%; color: var(--muted); font: 13px ui-sans-serif, system-ui, sans-serif; }
+      .file-note { margin: 7px 0 0; color: var(--muted); font-size: 12px; }
+      button {
+        min-height: 42px; padding: 0 16px; border: 0; border-radius: 8px; background: var(--green);
+        color: white; font: inherit; font-weight: 650; cursor: pointer;
+      }
+      button:disabled { opacity: .55; cursor: wait; }
+      .actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+      .text-button { padding: 0; background: transparent; color: var(--green); font-size: 13px; }
+      .status { min-height: 21px; color: var(--muted); font-size: 13px; }
+      .status.error { color: var(--red); }
+      .empty { display: grid; min-height: 380px; place-items: center; padding: 32px; text-align: center; color: var(--muted); }
+      .empty-icon { display: grid; width: 42px; height: 42px; margin: 0 auto 12px; place-items: center; border-radius: 12px; background: var(--green-pale); color: var(--green); font-size: 20px; }
+      .fields { display: grid; grid-template-columns: 1fr 1fr; gap: 0 20px; }
+      .field { padding: 12px 0; border-bottom: 1px solid #edf0ed; }
+      .field-name { color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+      .field-value { min-height: 22px; margin-top: 3px; overflow-wrap: anywhere; font-weight: 550; }
+      .null { color: #a5ada7; font-weight: 400; }
+      .notice { margin-top: 17px; padding: 11px 12px; border-radius: 8px; background: var(--green-pale); color: #28523f; font-size: 13px; }
+      .notice.warning { background: #fbefec; color: var(--red); }
+      details { margin-top: 16px; }
+      summary { color: var(--muted); font-size: 13px; cursor: pointer; }
+      pre { max-height: 220px; overflow: auto; padding: 12px; border-radius: 8px; background: #f2f4f1; font-size: 12px; }
+      @media (max-width: 760px) {
+        main { padding-top: 32px; }
+        .workspace { grid-template-columns: 1fr; }
+        .empty { min-height: 220px; }
+        .fields { grid-template-columns: 1fr 1fr; }
+        header { padding-right: 20px; padding-left: 20px; }
+      }
+      @media (max-width: 390px) { .fields { grid-template-columns: 1fr; } }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="brand"><span class="brand-mark">G</span> Groundwork</div>
+      <span class="tag">Document intelligence · Invoice demo</span>
+    </header>
+    <main>
+      <section class="intro">
+        <div class="eyebrow">Evidence-first extraction</div>
+        <h1>Turn invoice text into trusted data.</h1>
+        <p>Extract structured fields and check each value against the original text. Unsupported model output is withheld, not silently accepted.</p>
+      </section>
+      <section class="workspace" aria-label="Invoice extraction workspace">
+        <article class="panel">
+          <div class="panel-head"><h2>Source document</h2><span class="tag">Text or file</span></div>
+          <div class="panel-body">
+            <p class="hint">Paste text or upload a PDF or image. Files are read locally; extracted text is sent to your configured model endpoint.</p>
+            <textarea id="source" aria-label="Invoice source text" placeholder="Paste an invoice here..."></textarea>
+            <div class="or-divider">or upload a file</div>
+            <div class="file-picker">
+              <input id="file" type="file" accept=".pdf,.png,.jpg,.jpeg,application/pdf,image/png,image/jpeg" aria-label="Choose a PDF or image invoice">
+            </div>
+            <p class="file-note">PDF, PNG, JPG, or JPEG · up to 10 MB. Scanned PDFs and images use Tesseract OCR.</p>
+            <div class="actions">
+              <button id="extract">Extract fields</button>
+              <button id="sample" class="text-button">Load sample</button>
+            </div>
+            <p id="status" class="status" role="status" aria-live="polite"></p>
+          </div>
+        </article>
+        <article class="panel">
+          <div class="panel-head"><h2>Structured result</h2><span class="tag">Invoice schema · 9 fields</span></div>
+          <div id="output" class="empty">
+            <div><div class="empty-icon">{"}"}</div>Results will appear here after extraction.</div>
+          </div>
+        </article>
+      </section>
+    </main>
+    <script>
+      const sample = `INVOICE
+Invoice No: INV-2024-0187
+Supplier: Northstar Office Supplies Ltd.
+Customer: Greenfield Studio
+Issue date: 14 March 2024
+Due date: 13 April 2024
+
+Description                 Amount
+Paper and stationery        $1,240.00
+VAT (7.5%)                    $93.00
+Total                      $1,333.00
+Currency: USD`;
+      const fields = ["invoice_number", "supplier", "customer", "issue_date", "due_date", "currency", "subtotal", "tax", "total"];
+      const labels = {
+        invoice_number: "Invoice number", supplier: "Supplier", customer: "Customer",
+        issue_date: "Issue date", due_date: "Due date", currency: "Currency",
+        subtotal: "Subtotal", tax: "Tax", total: "Total"
+      };
+      const sourceInput = document.querySelector("#source");
+      const fileInput = document.querySelector("#file");
+      const output = document.querySelector("#output");
+      const status = document.querySelector("#status");
+      const extractButton = document.querySelector("#extract");
+
+      document.querySelector("#sample").addEventListener("click", () => {
+        fileInput.value = "";
+        sourceInput.value = sample;
+      });
+      extractButton.addEventListener("click", async () => {
+        const source = sourceInput.value.trim();
+        const file = fileInput.files[0];
+        if (!source && !file) {
+          status.textContent = "Paste invoice text or choose a supported file.";
+          status.className = "status error";
+          return;
+        }
+        if (file && file.size > 10_000_000) {
+          status.textContent = "Files must be 10 MB or smaller.";
+          status.className = "status error";
+          return;
+        }
+        extractButton.disabled = true;
+        status.textContent = file ? "Reading the document and extracting fields…" : "Checking with the configured model…";
+        status.className = "status";
+        try {
+          const requestOptions = file
+            ? (() => {
+                const formData = new FormData();
+                formData.append("file", file);
+                return { method: "POST", body: formData };
+              })()
+            : {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ source })
+              };
+          const response = await fetch("/api/extract", {
+            ...requestOptions
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Extraction failed.");
+          render(result);
+          status.textContent = result.document
+            ? `Extraction complete · ${result.document.filename}${result.document.ocr_used ? " · OCR used" : " · PDF text extracted"}`
+            : "Extraction complete.";
+        } catch (error) {
+          status.textContent = error.message;
+          status.className = "status error";
+        } finally {
+          extractButton.disabled = false;
+        }
+      });
+
+      function render(result) {
+        const fieldsHtml = fields.map((field) => {
+          const value = result.fields[field];
+          return `<div class="field"><div class="field-name">${labels[field]}</div><div class="field-value ${value === null ? "null" : ""}">${escapeHtml(value ?? "Not found")}</div></div>`;
+        }).join("");
+        const rejected = result.rejected || [];
+        const notice = rejected.length
+          ? `<div class="notice warning">${rejected.length} unsupported value(s) withheld: ${rejected.map((item) => `${escapeHtml(labels[item.field] || item.field)} (${escapeHtml(item.value)})`).join(", ")}</div>`
+          : `<div class="notice">All returned values are supported by the source text. This is a text-match check, not a guarantee of factual correctness.</div>`;
+        output.className = "panel-body";
+        output.innerHTML = `<div class="fields">${fieldsHtml}</div>${notice}<details><summary>View accepted JSON</summary><pre>${escapeHtml(JSON.stringify(result.fields, null, 2))}</pre></details>`;
+      }
+
+      function escapeHtml(value) {
+        return String(value).replace(/[&<>"']/g, (char) => ({
+          "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+        }[char]));
+      }
+    </script>
+  </body>
+</html>
