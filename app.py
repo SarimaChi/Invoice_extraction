@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
+from decimal import Decimal, InvalidOperation
+from datetime import date
 from email.parser import BytesParser
 from email.policy import default
 from io import BytesIO
@@ -31,6 +33,12 @@ FIELDS = (
     "tax",
     "total",
 )
+EXTRACTION_SYSTEM_PROMPT = (
+    "Extract invoice fields from the supplied source. Never infer or invent values. "
+    "Return only a JSON object with exactly these keys: invoice_number, supplier, "
+    "customer, issue_date, due_date, currency, subtotal, tax, total. Use null when "
+    "a value is absent. Preserve the exact text used for each value in the source."
+)
 
 
 class ExtractionError(Exception):
@@ -42,12 +50,151 @@ class InputError(ExtractionError):
 
 
 def _normalize(value: str) -> str:
-    return re.sub(r"[^a-z0-9]", "", value.casefold())
+    return " ".join(re.findall(r"[^\W_]+", value.casefold(), flags=re.UNICODE))
+
+
+def _decimal_value(value: str) -> Decimal | None:
+    candidate = re.sub(
+        r"(?i)\b(?:USD|EUR|GBP|NGN|CAD|AUD|CHF|JPY|CNY|INR)\b|[€$£¥₦₹\s\u00a0\u202f'’]",
+        "",
+        value,
+    )
+    if not candidate or not re.fullmatch(r"[+-]?\d[\d.,]*", candidate):
+        return None
+
+    comma = candidate.rfind(",")
+    period = candidate.rfind(".")
+    decimal_separator = None
+    if comma >= 0 and period >= 0:
+        decimal_separator = "," if comma > period else "."
+    elif comma >= 0 or period >= 0:
+        separator = "," if comma >= 0 else "."
+        groups = candidate.split(separator)
+        if len(groups) == 2 and len(groups[-1]) in (1, 2):
+            decimal_separator = separator
+        elif len(groups) > 2 and len(groups[-1]) in (1, 2):
+            decimal_separator = separator
+
+    if decimal_separator:
+        grouping_separator = "," if decimal_separator == "." else "."
+        candidate = candidate.replace(grouping_separator, "")
+        candidate = candidate.replace(decimal_separator, ".")
+    else:
+        candidate = candidate.replace(",", "").replace(".", "")
+
+    try:
+        return Decimal(candidate)
+    except InvalidOperation:
+        return None
+
+
+def _date_values(value: str) -> set[date]:
+    dates: set[date] = set()
+    pattern = re.compile(r"(?<!\d)(\d{1,4})[./-](\d{1,2})[./-](\d{1,4})(?!\d)")
+    for match in pattern.finditer(value):
+        first, second, third = (int(part) for part in match.groups())
+        candidates = (
+            [(first, second, third)]
+            if first > 31
+            else [(third, second, first), (third, first, second)]
+        )
+        for year, month, day in candidates:
+            if year < 100:
+                year += 2000
+            try:
+                dates.add(date(year, month, day))
+            except ValueError:
+                continue
+
+    month_names = {
+        "jan": 1, "january": 1, "janvier": 1,
+        "feb": 2, "february": 2, "fev": 2, "fevrier": 2, "février": 2,
+        "mar": 3, "march": 3, "mars": 3,
+        "apr": 4, "april": 4, "avr": 4, "avril": 4,
+        "may": 5, "mai": 5,
+        "jun": 6, "june": 6, "juin": 6,
+        "jul": 7, "july": 7, "juil": 7, "juillet": 7,
+        "aug": 8, "august": 8, "aout": 8, "août": 8,
+        "sep": 9, "sept": 9, "september": 9, "septembre": 9,
+        "oct": 10, "october": 10, "octobre": 10,
+        "nov": 11, "november": 11, "novembre": 11,
+        "dec": 12, "december": 12, "decembre": 12, "décembre": 12,
+    }
+    words_pattern = re.compile(
+        r"\b(\d{1,2})\s+([A-Za-zÀ-ÿ]+)\s+(\d{4})\b"
+        r"|\b([A-Za-zÀ-ÿ]+)\s+(\d{1,2}),?\s+(\d{4})\b",
+        flags=re.IGNORECASE,
+    )
+    for match in words_pattern.finditer(value):
+        if match.group(1):
+            day, month_name, year = int(match.group(1)), match.group(2), int(match.group(3))
+        else:
+            month_name, day, year = match.group(4), int(match.group(5)), int(match.group(6))
+        month = month_names.get(month_name.casefold().rstrip("."))
+        if month:
+            try:
+                dates.add(date(year, month, day))
+            except ValueError:
+                continue
+    return dates
 
 
 def is_source_grounded(value: str, source: str) -> bool:
     normalized_value = _normalize(value)
-    return bool(normalized_value) and normalized_value in _normalize(source)
+    if not normalized_value:
+        return False
+
+    target_dates = _date_values(value)
+    if target_dates and target_dates.intersection(_date_values(source)):
+        return True
+
+    numeric_target = _decimal_value(value)
+    if numeric_target is not None:
+        currency_codes = re.findall(
+            r"(?i)\b(?:USD|EUR|GBP|NGN|CAD|AUD|CHF|JPY|CNY|INR)\b", value
+        )
+        normalized_source = _normalize(source)
+        if any(
+            not re.search(
+                r"(?<!\w)" + re.escape(code.casefold()) + r"(?!\w)",
+                normalized_source,
+                flags=re.UNICODE,
+            )
+            for code in currency_codes
+        ):
+            return False
+        number_pattern = re.compile(
+            r"(?<![\w])[+-]?\d+(?:[ \u00a0\u202f]\d{3})*(?:[.,]\d+)*(?![\w])",
+            flags=re.UNICODE,
+        )
+        return any(
+            _decimal_value(match.group(0)) == numeric_target
+            for match in number_pattern.finditer(source)
+        )
+
+    normalized_source = _normalize(source)
+    return bool(
+        re.search(
+            r"(?<!\w)" + re.escape(normalized_value) + r"(?!\w)",
+            normalized_source,
+            flags=re.UNICODE,
+        )
+    )
+
+
+def values_equivalent(field: str, left: Any, right: Any) -> bool:
+    if left == right:
+        return True
+    if not isinstance(left, str) or not isinstance(right, str):
+        return False
+    if field in ("issue_date", "due_date"):
+        left_dates = _date_values(left)
+        return bool(left_dates and left_dates.intersection(_date_values(right)))
+    if field in ("subtotal", "tax", "total"):
+        left_number = _decimal_value(left)
+        right_number = _decimal_value(right)
+        return left_number is not None and left_number == right_number
+    return _normalize(left) == _normalize(right)
 
 
 def _detect_document_format(filename: str, content: bytes) -> str:
@@ -75,7 +222,8 @@ def _ocr_image(image: Any) -> str:
             "Image OCR dependencies are missing. Install requirements.txt and Tesseract."
         ) from error
     try:
-        return pytesseract.image_to_string(image, timeout=30)
+        ocr_input = image.convert("RGB") if hasattr(image, "convert") else image
+        return pytesseract.image_to_string(ocr_input, timeout=30)
     except pytesseract.TesseractNotFoundError as error:
         raise ExtractionError(
             "Tesseract OCR is not installed. Install it to read image and scanned PDF files."
@@ -254,21 +402,11 @@ def _extract_with_model(source: str) -> dict[str, Any]:
     if api_key:
         headers["Authorization"] = "Bearer " + api_key
 
-    schema = {field: "string or null" for field in FIELDS}
     payload = {
         "model": model,
         "temperature": 0,
         "messages": [
-            {
-                "role": "system",
-                "content": (
-                    "Extract invoice fields from the supplied source. Never infer or "
-                    "invent values. Return only a JSON object with exactly these keys: "
-                    + json.dumps(schema)
-                    + ". Use null when a value is absent. Preserve the exact text "
-                    "used for each value in the source."
-                ),
-            },
+            {"role": "system", "content": EXTRACTION_SYSTEM_PROMPT},
             {"role": "user", "content": source},
         ],
     }
