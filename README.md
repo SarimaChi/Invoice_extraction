@@ -7,7 +7,7 @@ measuring extraction quality.
 ## Run the app
 
 Requires Python 3.9 or newer and an OpenAI-compatible chat-completions server.
-For local inference, start vLLM separately, for example:
+For local inference, start vLLM separately:
 
 ```sh
 python3 -m venv .venv
