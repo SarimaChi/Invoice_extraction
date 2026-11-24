@@ -57,8 +57,6 @@ Training metrics are saved as `training_metrics.json` in each output directory.
 
 ## 4. Reproduce the benchmark
 
-This command reproduces the reported pilot: the first 20 records of the 200-document test split, greedy decoding, 192-token generation limit.
-
 ```sh
 python tools/benchmark_models.py \
   --data data/processed/invoice_dataset/test.jsonl \
